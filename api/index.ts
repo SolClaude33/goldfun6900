@@ -8,7 +8,6 @@ import { getFirestore } from "firebase-admin/firestore";
 import { getApps, initializeApp, cert, type ServiceAccount } from "firebase-admin/app";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { VersionedTransaction, Transaction } from "@solana/web3.js";
 
 // --- Token CA ---
 function getTokenCa(): string | null {
@@ -61,6 +60,7 @@ async function getDistributionLogs(limit = 50): Promise<{ id: string; transactio
 // --- Solana (Pump.fun + GOLD) ---
 const RPC = process.env.HELIUS_RPC_URL || process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const PUMP_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
+const PUMP_FEE_PROGRAM_ID = new PublicKey("pfeeUxB6jkeY1Hxd7CsFCAjcbHA9rWtchMGdZ6VojVZ");
 const GOLD_MINT = new PublicKey("GoLDppdjB1vDTPSGxyMJFqdnj134yH6Prg9eqsGDiw6A");
 
 /** Anchor: first 8 bytes of sha256("global:collect_creator_fee"). */
@@ -68,10 +68,17 @@ const COLLECT_CREATOR_FEE_DISCRIMINATOR = Buffer.from(
   createHash("sha256").update("global:collect_creator_fee").digest().subarray(0, 8)
 );
 
+function isCollectCreatorFeeInstruction(programId: PublicKey, data: Uint8Array): boolean {
+  if (data.length < 8) return false;
+  const first8 = Buffer.from(data.subarray(0, 8));
+  if (!first8.equals(COLLECT_CREATOR_FEE_DISCRIMINATOR)) return false;
+  return programId.equals(PUMP_PROGRAM_ID) || programId.equals(PUMP_FEE_PROGRAM_ID);
+}
+
 const MAX_COLLECT_FEE_SIGS = 50;
 const MAX_COLLECT_FEE_PARSE = 8;
 
-/** Total SOL received by dev wallet in collect_creator_fee txs (Pump.fun). Based on dev wallet, not CA. */
+/** Total SOL received by dev wallet in collect_creator_fee txs (Pump.fun). Uses parsed response (Connection does not pass encoding). */
 async function getTotalProtocolFeesFromCollectCreatorFee(devWalletAddress: string): Promise<number> {
   try {
     const connection = new Connection(RPC, "confirmed");
@@ -85,62 +92,38 @@ async function getTotalProtocolFeesFromCollectCreatorFee(devWalletAddress: strin
         const txResp = await connection.getTransaction(signature, {
           maxSupportedTransactionVersion: 0,
           commitment: "confirmed",
-          encoding: "base64",
-        } as Parameters<Connection["getTransaction"]>[1]);
-        if (!txResp?.meta || !txResp.transaction) continue;
-        const raw = Buffer.from(
-          typeof txResp.transaction === "string" ? txResp.transaction : (txResp.transaction as unknown as string),
-          "base64"
-        );
-        if (raw.length < 1) continue;
-        const preBalances = txResp.meta.preBalances as number[];
-        const postBalances = txResp.meta.postBalances as number[];
-        let accountKeys: PublicKey[] = [];
+        });
+        if (!txResp?.meta?.preBalances || !txResp?.meta?.postBalances || !txResp?.transaction?.message) continue;
+        const message = txResp.transaction.message;
+        const loadedWritable = (txResp.meta as { loadedWritableAddresses?: string[] }).loadedWritableAddresses ?? [];
+        const loadedReadonly = (txResp.meta as { loadedReadonlyAddresses?: string[] }).loadedReadonlyAddresses ?? [];
+        const allKeys = message.getAccountKeys({
+          accountKeysFromLookups: {
+            writable: loadedWritable.map((a) => new PublicKey(a)),
+            readonly: loadedReadonly.map((a) => new PublicKey(a)),
+          },
+        });
         let isCollectCreatorFee = false;
-        const isVersioned = (raw[0] & 0x80) !== 0;
-        if (!isVersioned) {
-          const tx = Transaction.from(raw);
-          const msg = tx.compileMessage();
-          accountKeys = msg.accountKeys.map((k: PublicKey) => (typeof k === "string" ? new PublicKey(k) : k));
-          for (const ix of msg.compiledInstructions) {
-            const programId = accountKeys[ix.programIdIndex];
-            if (programId?.equals(PUMP_PROGRAM_ID) && ix.data?.length >= 8) {
-              const data = Buffer.from(ix.data);
-              if (data.subarray(0, 8).equals(COLLECT_CREATOR_FEE_DISCRIMINATOR)) {
-                isCollectCreatorFee = true;
-                break;
-              }
-            }
-          }
-        } else {
-          const vtx = VersionedTransaction.deserialize(new Uint8Array(raw));
-          const loadedWritable = (txResp.meta as { loadedWritableAddresses?: string[] }).loadedWritableAddresses ?? [];
-          const loadedReadonly = (txResp.meta as { loadedReadonlyAddresses?: string[] }).loadedReadonlyAddresses ?? [];
-          const allKeys = vtx.message.getAccountKeys({
-            accountKeysFromLookups: {
-              writable: loadedWritable.map((a) => new PublicKey(a)),
-              readonly: loadedReadonly.map((a) => new PublicKey(a)),
-            },
-          });
-          for (const ix of vtx.message.compiledInstructions) {
-            const programId = allKeys.get(ix.programIdIndex);
-            if (!programId) continue;
-            if (programId.equals(PUMP_PROGRAM_ID) && ix.data.length >= 8) {
-              const data = Buffer.from(ix.data);
-              if (data.subarray(0, 8).equals(COLLECT_CREATOR_FEE_DISCRIMINATOR)) {
-                isCollectCreatorFee = true;
-                break;
-              }
-            }
-          }
-          accountKeys = [];
-          for (let i = 0; i < allKeys.length; i++) {
-            const pk = allKeys.get(i);
-            if (pk) accountKeys.push(pk);
+        let hasFeeProgram = false;
+        for (const ix of message.compiledInstructions) {
+          const programId = allKeys.get(ix.programIdIndex);
+          if (!programId) continue;
+          if (programId.equals(PUMP_FEE_PROGRAM_ID)) hasFeeProgram = true;
+          if (isCollectCreatorFeeInstruction(programId, ix.data)) {
+            isCollectCreatorFee = true;
+            break;
           }
         }
-        if (!isCollectCreatorFee) continue;
-        const walletIndex = accountKeys.findIndex((k) => k.toBase58() === walletStr);
+        if (!isCollectCreatorFee && !hasFeeProgram) continue;
+        const preBalances = txResp.meta.preBalances as number[];
+        const postBalances = txResp.meta.postBalances as number[];
+        const walletIndex = (() => {
+          for (let i = 0; i < allKeys.length; i++) {
+            const pk = allKeys.get(i);
+            if (pk?.toBase58() === walletStr) return i;
+          }
+          return -1;
+        })();
         if (walletIndex >= 0 && walletIndex < preBalances.length && walletIndex < postBalances.length) {
           const delta = postBalances[walletIndex] - preBalances[walletIndex];
           if (delta > 0) totalLamports += delta;

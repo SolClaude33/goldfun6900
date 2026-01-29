@@ -75,8 +75,8 @@ function isCollectCreatorFeeInstruction(programId: PublicKey, data: Uint8Array):
   return programId.equals(PUMP_PROGRAM_ID) || programId.equals(PUMP_FEE_PROGRAM_ID);
 }
 
-const MAX_COLLECT_FEE_SIGS = 50;
-const MAX_COLLECT_FEE_PARSE = 8;
+const MAX_COLLECT_FEE_SIGS = 120;
+const MAX_COLLECT_FEE_PARSE = 40;
 
 /** Total SOL received by dev wallet in collect_creator_fee txs (Pump.fun). Uses parsed response (Connection does not pass encoding). */
 async function getTotalProtocolFeesFromCollectCreatorFee(devWalletAddress: string): Promise<number> {

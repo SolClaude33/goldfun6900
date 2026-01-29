@@ -1,25 +1,25 @@
-import type { Express } from "express";
-import { type Server } from "http";
-import { getPumpProtocolFees, getFeesConvertedToGold } from "./solana-read";
+/**
+ * Express app solo con rutas públicas (para Vercel serverless).
+ */
+import express from "express";
 import { getDistributionLogs } from "./firebase";
+import { getPumpProtocolFees, getFeesConvertedToGold } from "./solana";
 
-/** Token CA from env: CA, TOKEN_CA, or CONTRACT_ADDRESS (Vercel/local). */
 function getTokenCa(): string | null {
   const v = process.env.CA ?? process.env.TOKEN_CA ?? process.env.CONTRACT_ADDRESS;
   return (v && String(v).trim()) || null;
 }
 
-export async function registerRoutes(
-  httpServer: Server,
-  app: Express
-): Promise<Server> {
+export function createApp() {
+  const app = express();
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: false }));
 
   app.get("/api/public/config", (_req, res) => {
     try {
       res.json({ ca: getTokenCa() });
-    } catch (err) {
-      console.error("Error in /api/public/config:", err);
-      res.status(500).json({ ca: null, error: "Config error" });
+    } catch {
+      res.status(500).json({ ca: null });
     }
   });
 
@@ -27,8 +27,8 @@ export async function registerRoutes(
     try {
       const logs = await getDistributionLogs(50);
       res.json(logs);
-    } catch (error) {
-      console.error("Error fetching distribution logs:", error);
+    } catch (err) {
+      console.error("distribution-logs:", err);
       res.status(500).json({ error: "Failed to fetch distribution logs" });
     }
   });
@@ -36,12 +36,10 @@ export async function registerRoutes(
   app.get("/api/public/stats", async (_req, res) => {
     try {
       const tokenCa = getTokenCa();
-
       const totalProtocolFees = tokenCa ? await getPumpProtocolFees(tokenCa) : 0;
       const feesConvertedToGold = process.env.DEV_WALLET_ADDRESS
         ? await getFeesConvertedToGold(process.env.DEV_WALLET_ADDRESS)
         : 0;
-
       res.json({
         totalDistributions: 0,
         totalGoldDistributed: feesConvertedToGold,
@@ -63,19 +61,14 @@ export async function registerRoutes(
         goldDistributionPercentage: "70",
         burnPercentage: "30",
       });
-    } catch (error) {
-      console.error("Error fetching stats:", error);
+    } catch (err) {
+      console.error("stats:", err);
       res.status(500).json({ error: "Failed to fetch stats" });
     }
   });
 
-  app.get("/api/public/distributions", (_req, res) => {
-    res.json([]);
-  });
+  app.get("/api/public/distributions", (_req, res) => res.json([]));
+  app.get("/api/public/distributions/:id", (_req, res) => res.status(404).json({ error: "Distribution not found" }));
 
-  app.get("/api/public/distributions/:id", (_req, res) => {
-    res.status(404).json({ error: "Distribution not found" });
-  });
-
-  return httpServer;
+  return app;
 }

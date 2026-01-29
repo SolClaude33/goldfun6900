@@ -4,7 +4,7 @@
 
 | Variable | Descripción | Ejemplo |
 |----------|-------------|---------|
-| **CA** | Contrato del token (Pump.fun). Se muestra en el Hero y se usa para "Total Protocol Fees". | `DnK8GbpQfby6N9wFfifSfg32gjguXyc3qfVMsYkepump` |
+| **CA** | Contrato del token (Pump.fun). Se muestra en el Hero y se usa para "Total Protocol Fees". También se lee **TOKEN_CA** o **CONTRACT_ADDRESS** si CA no está. | `DnK8GbpQfby6N9wFfifSfg32gjguXyc3qfVMsYkepump` |
 | **HELIUS_RPC_URL** | URL del RPC de Solana (Helius u otro). Sin esto se usa el RPC público, que puede ir lento o limitado. | `https://mainnet.helius-rpc.com/?api-key=TU_API_KEY` |
 
 ## Opcionales (según lo que quieras usar)

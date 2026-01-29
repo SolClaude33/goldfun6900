@@ -3,10 +3,12 @@
  * /api/* → Express app con rutas públicas (config, stats, distribution-logs).
  */
 import express from "express";
+import { createHash } from "crypto";
 import { getFirestore } from "firebase-admin/firestore";
 import { getApps, initializeApp, cert, type ServiceAccount } from "firebase-admin/app";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
+import { VersionedTransaction, Transaction } from "@solana/web3.js";
 
 // --- Token CA ---
 function getTokenCa(): string | null {
@@ -61,49 +63,87 @@ const RPC = process.env.HELIUS_RPC_URL || process.env.SOLANA_RPC || "https://api
 const PUMP_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const GOLD_MINT = new PublicKey("GoLDppdjB1vDTPSGxyMJFqdnj134yH6Prg9eqsGDiw6A");
 
-function deriveBondingCurve(mint: PublicKey): PublicKey {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("bonding-curve"), mint.toBuffer()],
-    PUMP_PROGRAM_ID
-  );
-  return pda;
-}
+/** Anchor: first 8 bytes of sha256("global:collect_creator_fee"). */
+const COLLECT_CREATOR_FEE_DISCRIMINATOR = Buffer.from(
+  createHash("sha256").update("global:collect_creator_fee").digest().subarray(0, 8)
+);
 
-function derivePumpCreatorVault(creator: PublicKey): PublicKey {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("creator-vault"), creator.toBuffer()],
-    PUMP_PROGRAM_ID
-  );
-  return pda;
-}
+const MAX_COLLECT_FEE_SIGS = 100;
+const MAX_COLLECT_FEE_PARSE = 25;
 
-async function getCreatorVaultBalance(connection: Connection, curveAccountData: Buffer): Promise<number> {
-  if (curveAccountData.length < 81) return 0;
-  const creator = new PublicKey(curveAccountData.subarray(49, 81));
-  const creatorVault = derivePumpCreatorVault(creator);
-  const vaultInfo = await connection.getAccountInfo(creatorVault);
-  if (!vaultInfo) return 0;
-  const rentExempt = await connection.getMinimumBalanceForRentExemption(0);
-  return Math.max(0, vaultInfo.lamports - rentExempt) / LAMPORTS_PER_SOL;
-}
-
-async function getPumpProtocolFees(tokenMintOrCurveAddress: string): Promise<number> {
+/** Total SOL received by dev wallet in collect_creator_fee txs (Pump.fun). Based on dev wallet, not CA. */
+async function getTotalProtocolFeesFromCollectCreatorFee(devWalletAddress: string): Promise<number> {
   try {
     const connection = new Connection(RPC, "confirmed");
-    const mint = new PublicKey(tokenMintOrCurveAddress);
-    // 1) Try as mint: derive bonding curve PDA
-    const bondingCurve = deriveBondingCurve(mint);
-    let curveAccount = await connection.getAccountInfo(bondingCurve);
-    // 2) If no curve at PDA, try address as bonding curve account (user might have pasted curve address)
-    if (!curveAccount) {
-      curveAccount = await connection.getAccountInfo(mint);
+    const wallet = new PublicKey(devWalletAddress);
+    const walletStr = devWalletAddress;
+    const sigs = await connection.getSignaturesForAddress(wallet, { limit: MAX_COLLECT_FEE_SIGS });
+    let totalLamports = 0;
+    const toParse = sigs.slice(0, MAX_COLLECT_FEE_PARSE);
+    for (const { signature } of toParse) {
+      try {
+        const txResp = await connection.getTransaction(signature, {
+          encoding: "base64",
+          maxSupportedTransactionVersion: 0,
+        });
+        if (!txResp?.meta || !txResp.transaction) continue;
+        const raw = Buffer.from(
+          typeof txResp.transaction === "string" ? txResp.transaction : (txResp.transaction as unknown as string),
+          "base64"
+        );
+        if (raw.length < 1) continue;
+        const preBalances = txResp.meta.preBalances as number[];
+        const postBalances = txResp.meta.postBalances as number[];
+        let accountKeys: PublicKey[] = [];
+        let isCollectCreatorFee = false;
+        const isVersioned = (raw[0] & 0x80) !== 0;
+        if (!isVersioned) {
+          const tx = Transaction.from(raw);
+          accountKeys = tx.message.accountKeys.map((k) => (typeof k === "string" ? new PublicKey(k) : k));
+          for (const ix of tx.message.instructions) {
+            const programId = accountKeys[ix.programIdIndex];
+            if (programId?.equals(PUMP_PROGRAM_ID) && ix.data?.length >= 8) {
+              const data = Buffer.from(ix.data);
+              if (data.subarray(0, 8).equals(COLLECT_CREATOR_FEE_DISCRIMINATOR)) {
+                isCollectCreatorFee = true;
+                break;
+              }
+            }
+          }
+        } else {
+          const vtx = VersionedTransaction.deserialize(new Uint8Array(raw));
+          const loadedWritable = (txResp.meta as { loadedWritableAddresses?: string[] }).loadedWritableAddresses ?? [];
+          const loadedReadonly = (txResp.meta as { loadedReadonlyAddresses?: string[] }).loadedReadonlyAddresses ?? [];
+          const allKeys = vtx.message.getAccountKeys({
+            accountKeysFromLookups: {
+              writable: loadedWritable.map((a) => new PublicKey(a)),
+              readonly: loadedReadonly.map((a) => new PublicKey(a)),
+            },
+          });
+          for (const ix of vtx.message.compiledInstructions) {
+            const programId = allKeys.get(ix.programIdIndex);
+            if (programId?.equals(PUMP_PROGRAM_ID) && ix.data.length >= 8) {
+              const data = Buffer.from(ix.data);
+              if (data.subarray(0, 8).equals(COLLECT_CREATOR_FEE_DISCRIMINATOR)) {
+                isCollectCreatorFee = true;
+                break;
+              }
+            }
+          }
+          accountKeys = [];
+          for (let i = 0; i < allKeys.length; i++) accountKeys.push(allKeys.get(i));
+        }
+        if (!isCollectCreatorFee) continue;
+        const walletIndex = accountKeys.findIndex((k) => k.toBase58() === walletStr);
+        if (walletIndex >= 0 && walletIndex < preBalances.length && walletIndex < postBalances.length) {
+          const delta = postBalances[walletIndex] - preBalances[walletIndex];
+          if (delta > 0) totalLamports += delta;
+        }
+      } catch {
+        /**/
+      }
     }
-    if (!curveAccount?.data) return 0;
-    const data = curveAccount.data;
-    // Standard Pump layout: 8 discriminator + 5×u64 + 1 bool + 32 creator = 81 bytes. Read creator at 49-81.
-    // Skip strict discriminator check so different Pump deployments still work.
-    if (data.length < 81) return 0;
-    return getCreatorVaultBalance(connection, data);
+    return totalLamports / LAMPORTS_PER_SOL;
   } catch {
     return 0;
   }
@@ -193,9 +233,12 @@ function buildApp() {
         statsInFlight = (async () => {
           try {
             const tokenCa = getTokenCa();
-            const totalProtocolFees = tokenCa ? await getPumpProtocolFees(tokenCa) : 0;
-            const feesConvertedToGold = process.env.DEV_WALLET_ADDRESS
-              ? await getFeesConvertedToGold(process.env.DEV_WALLET_ADDRESS)
+            const devWallet = process.env.DEV_WALLET_ADDRESS ?? null;
+            const totalProtocolFees = devWallet
+              ? await getTotalProtocolFeesFromCollectCreatorFee(devWallet)
+              : 0;
+            const feesConvertedToGold = devWallet
+              ? await getFeesConvertedToGold(devWallet)
               : 0;
             return {
               totalDistributions: 0,

@@ -4,14 +4,14 @@
 
 | Variable | Descripción | Ejemplo |
 |----------|-------------|---------|
-| **CA** | Contrato del token (Pump.fun). Se muestra en el Hero y se usa para "Total Protocol Fees". También se lee **TOKEN_CA** o **CONTRACT_ADDRESS** si CA no está. | `DnK8GbpQfby6N9wFfifSfg32gjguXyc3qfVMsYkepump` |
+| **CA** | Contrato del token (Pump.fun). Se muestra en el Hero. También se lee **TOKEN_CA** o **CONTRACT_ADDRESS** si CA no está. **Total Protocol Fees** se calcula por la dev wallet (txs collect_creator_fee), no por el CA. | `DnK8GbpQfby6N9wFfifSfg32gjguXyc3qfVMsYkepump` |
 | **HELIUS_RPC_URL** | URL del RPC de Solana (Helius u otro). Sin esto se usa el RPC público, que puede ir lento o limitado. | `https://mainnet.helius-rpc.com/?api-key=TU_API_KEY` |
 
 ## Opcionales (según lo que quieras usar)
 
 | Variable | Descripción | Si no la pones |
 |----------|-------------|----------------|
-| **DEV_WALLET_ADDRESS** | Wallet para "Fees converted to Gold" (suma de GOLD recibido en las últimas 500 txs). | Esa stat queda en 0. |
+| **DEV_WALLET_ADDRESS** | Wallet que recibe las creator fees de Pump.fun. Se usa para **Total Protocol Fees** (suma SOL de txs `collect_creator_fee`) y para **Fees converted to Gold** (GOLD recibido). | Ambas stats quedan en 0. |
 | **SOLANA_RPC** | Alternativa a HELIUS_RPC_URL. Se usa si no existe HELIUS_RPC_URL. | Se usa HELIUS_RPC_URL o el RPC público. |
 | **FIREBASE_PROJECT_ID** | Proyecto de Firebase (Firestore). Requerido para logs, distribuciones y config. | Logs, distribuciones y config quedan vacíos o por defecto. |
 | **FIREBASE_CLIENT_EMAIL** | Email del service account de Firebase. | Necesario junto con FIREBASE_PRIVATE_KEY. |

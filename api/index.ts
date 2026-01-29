@@ -68,8 +68,8 @@ const COLLECT_CREATOR_FEE_DISCRIMINATOR = Buffer.from(
   createHash("sha256").update("global:collect_creator_fee").digest().subarray(0, 8)
 );
 
-const MAX_COLLECT_FEE_SIGS = 100;
-const MAX_COLLECT_FEE_PARSE = 25;
+const MAX_COLLECT_FEE_SIGS = 50;
+const MAX_COLLECT_FEE_PARSE = 8;
 
 /** Total SOL received by dev wallet in collect_creator_fee txs (Pump.fun). Based on dev wallet, not CA. */
 async function getTotalProtocolFeesFromCollectCreatorFee(devWalletAddress: string): Promise<number> {
@@ -83,9 +83,10 @@ async function getTotalProtocolFeesFromCollectCreatorFee(devWalletAddress: strin
     for (const { signature } of toParse) {
       try {
         const txResp = await connection.getTransaction(signature, {
-          encoding: "base64",
           maxSupportedTransactionVersion: 0,
-        });
+          commitment: "confirmed",
+          encoding: "base64",
+        } as Parameters<Connection["getTransaction"]>[1]);
         if (!txResp?.meta || !txResp.transaction) continue;
         const raw = Buffer.from(
           typeof txResp.transaction === "string" ? txResp.transaction : (txResp.transaction as unknown as string),
@@ -99,8 +100,9 @@ async function getTotalProtocolFeesFromCollectCreatorFee(devWalletAddress: strin
         const isVersioned = (raw[0] & 0x80) !== 0;
         if (!isVersioned) {
           const tx = Transaction.from(raw);
-          accountKeys = tx.message.accountKeys.map((k) => (typeof k === "string" ? new PublicKey(k) : k));
-          for (const ix of tx.message.instructions) {
+          const msg = tx.compileMessage();
+          accountKeys = msg.accountKeys.map((k: PublicKey) => (typeof k === "string" ? new PublicKey(k) : k));
+          for (const ix of msg.compiledInstructions) {
             const programId = accountKeys[ix.programIdIndex];
             if (programId?.equals(PUMP_PROGRAM_ID) && ix.data?.length >= 8) {
               const data = Buffer.from(ix.data);
@@ -122,7 +124,8 @@ async function getTotalProtocolFeesFromCollectCreatorFee(devWalletAddress: strin
           });
           for (const ix of vtx.message.compiledInstructions) {
             const programId = allKeys.get(ix.programIdIndex);
-            if (programId?.equals(PUMP_PROGRAM_ID) && ix.data.length >= 8) {
+            if (!programId) continue;
+            if (programId.equals(PUMP_PROGRAM_ID) && ix.data.length >= 8) {
               const data = Buffer.from(ix.data);
               if (data.subarray(0, 8).equals(COLLECT_CREATOR_FEE_DISCRIMINATOR)) {
                 isCollectCreatorFee = true;
@@ -131,7 +134,10 @@ async function getTotalProtocolFeesFromCollectCreatorFee(devWalletAddress: strin
             }
           }
           accountKeys = [];
-          for (let i = 0; i < allKeys.length; i++) accountKeys.push(allKeys.get(i));
+          for (let i = 0; i < allKeys.length; i++) {
+            const pk = allKeys.get(i);
+            if (pk) accountKeys.push(pk);
+          }
         }
         if (!isCollectCreatorFee) continue;
         const walletIndex = accountKeys.findIndex((k) => k.toBase58() === walletStr);

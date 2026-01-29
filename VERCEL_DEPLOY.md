@@ -31,8 +31,9 @@ git push -u origin main
    | `CA` | Token contract (Pump.fun). Shown in Hero; used for Total Protocol Fees. |
    | `DEV_WALLET_ADDRESS` | Wallet for "Fees converted to Gold" (optional). |
    | `HELIUS_RPC_URL` or `SOLANA_RPC` | Solana RPC for dashboard stats (recommended in production). |
-   | `DATABASE_URL` | PostgreSQL (optional; in-memory used if missing in dev). |
-   | `FIREBASE_PROJECT_ID` | Firebase for distribution logs (optional). |
+   | `FIREBASE_PROJECT_ID` | Firebase project ID (required for Firestore). |
+   | `FIREBASE_CLIENT_EMAIL` | Firebase service account email. |
+   | `FIREBASE_PRIVATE_KEY` | Firebase service account private key. |
    | `FIREBASE_CLIENT_EMAIL` | Firebase service account (optional). |
    | `FIREBASE_PRIVATE_KEY` | Firebase private key (optional). |
 

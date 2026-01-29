@@ -1,11 +1,10 @@
 /**
- * Firebase Firestore for distribution logs (Transaction, Gold distributed, Date).
- * Edit manually in Firebase Console. App only reads.
+ * Firebase Firestore: solo colección distributionLogs (System Logs).
  */
 import { getFirestore } from "firebase-admin/firestore";
 import { getApps, initializeApp, cert, type ServiceAccount } from "firebase-admin/app";
 
-const COLLECTION = "distributionLogs";
+const COLLECTION_LOGS = "distributionLogs";
 
 export interface DistributionLogEntry {
   id: string;
@@ -39,13 +38,13 @@ function getDb(): ReturnType<typeof getFirestore> | null {
   }
 }
 
-/** Get distribution logs from Firestore, sorted by date descending. */
+/** Get distribution logs (System Logs in dashboard), sorted by date descending. */
 export async function getDistributionLogs(limit = 50): Promise<DistributionLogEntry[]> {
   const db = getDb();
   if (!db) return [];
   try {
     const snap = await db
-      .collection(COLLECTION)
+      .collection(COLLECTION_LOGS)
       .orderBy("date", "desc")
       .limit(limit)
       .get();

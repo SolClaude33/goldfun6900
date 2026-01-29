@@ -78,24 +78,40 @@ function derivePumpCreatorVault(creator: PublicKey): PublicKey {
   return pda;
 }
 
-async function getPumpProtocolFees(tokenMintAddress: string): Promise<number> {
+async function getCreatorVaultBalance(connection: Connection, curveAccountData: Buffer): Promise<number> {
+  if (curveAccountData.length < 81) return 0;
+  const creator = new PublicKey(curveAccountData.subarray(49, 81));
+  const creatorVault = derivePumpCreatorVault(creator);
+  const vaultInfo = await connection.getAccountInfo(creatorVault);
+  if (!vaultInfo) return 0;
+  const rentExempt = await connection.getMinimumBalanceForRentExemption(0);
+  return Math.max(0, vaultInfo.lamports - rentExempt) / LAMPORTS_PER_SOL;
+}
+
+async function getPumpProtocolFees(tokenMintOrCurveAddress: string): Promise<number> {
   try {
     const connection = new Connection(RPC, "confirmed");
-    const mint = new PublicKey(tokenMintAddress);
+    const mint = new PublicKey(tokenMintOrCurveAddress);
+    // 1) Try as mint: derive bonding curve PDA
     const bondingCurve = deriveBondingCurve(mint);
-    const curveAccount = await connection.getAccountInfo(bondingCurve);
-    if (!curveAccount || curveAccount.data.length < 81) return 0;
+    let curveAccount = await connection.getAccountInfo(bondingCurve);
+    // 2) If no curve at PDA, try address as bonding curve account (user might have pasted curve address)
+    if (!curveAccount) {
+      curveAccount = await connection.getAccountInfo(mint);
+    }
+    if (!curveAccount?.data) return 0;
     const data = curveAccount.data;
     if (!data.subarray(0, 8).equals(PUMP_CURVE_DISCRIMINATOR)) return 0;
-    const creator = new PublicKey(data.subarray(49, 81));
-    const creatorVault = derivePumpCreatorVault(creator);
-    const vaultInfo = await connection.getAccountInfo(creatorVault);
-    if (!vaultInfo) return 0;
-    const rentExempt = await connection.getMinimumBalanceForRentExemption(0);
-    return Math.max(0, vaultInfo.lamports - rentExempt) / LAMPORTS_PER_SOL;
+    return getCreatorVaultBalance(connection, data);
   } catch {
     return 0;
   }
+}
+
+function toNum(v: number | string | null | undefined): number {
+  if (v == null) return 0;
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  return Number.isFinite(n) ? n : 0;
 }
 
 async function getFeesConvertedToGold(devWalletAddress: string): Promise<number> {
@@ -110,15 +126,16 @@ async function getFeesConvertedToGold(devWalletAddress: string): Promise<number>
         const tx = await connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0 });
         if (!tx?.meta?.postTokenBalances || !tx?.meta?.preTokenBalances) continue;
         const preByKey = new Map(
-          (tx.meta.preTokenBalances as { mint: string; owner: string; uiTokenAmount: { uiAmount: number } }[]).map((b) => [
+          (tx.meta.preTokenBalances as { mint: string; owner: string; uiTokenAmount?: { uiAmount?: number | string } }[]).map((b) => [
             `${b.mint}:${b.owner}`,
-            b.uiTokenAmount?.uiAmount ?? 0,
+            toNum(b.uiTokenAmount?.uiAmount),
           ])
         );
-        for (const post of tx.meta.postTokenBalances as { mint: string; owner: string; uiTokenAmount: { uiAmount: number } }[]) {
+        for (const post of tx.meta.postTokenBalances as { mint: string; owner: string; uiTokenAmount?: { uiAmount?: number | string } }[]) {
           if (post.mint !== goldMintStr || post.owner !== devWalletAddress) continue;
           const pre = preByKey.get(`${post.mint}:${post.owner}`) ?? 0;
-          const delta = (post.uiTokenAmount?.uiAmount ?? 0) - pre;
+          const postVal = toNum(post.uiTokenAmount?.uiAmount);
+          const delta = postVal - pre;
           if (delta > 0) totalGold += delta;
         }
       } catch {

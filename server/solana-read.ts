@@ -27,27 +27,36 @@ function derivePumpCreatorVault(creator: PublicKey): PublicKey {
 
 const PUMP_CURVE_DISCRIMINATOR = Buffer.from([0x17, 0xb7, 0xf8, 0x37, 0x60, 0xd8, 0xac, 0x60]);
 
-/** Get Pump.fun creator vault SOL balance (protocol fees) for a token mint. */
-export async function getPumpProtocolFees(tokenMintAddress: string): Promise<number> {
+async function getCreatorVaultBalance(connection: Connection, curveAccountData: Buffer): Promise<number> {
+  if (curveAccountData.length < 81) return 0;
+  const creator = new PublicKey(curveAccountData.subarray(49, 81));
+  const creatorVault = derivePumpCreatorVault(creator);
+  const vaultInfo = await connection.getAccountInfo(creatorVault);
+  if (!vaultInfo) return 0;
+  const rentExempt = await connection.getMinimumBalanceForRentExemption(0);
+  return Math.max(0, vaultInfo.lamports - rentExempt) / LAMPORTS_PER_SOL;
+}
+
+/** Get Pump.fun creator vault SOL balance (protocol fees). Accepts token mint or bonding curve address. */
+export async function getPumpProtocolFees(tokenMintOrCurveAddress: string): Promise<number> {
   try {
     const connection = new Connection(RPC, "confirmed");
-    const mint = new PublicKey(tokenMintAddress);
-    const bondingCurve = deriveBondingCurve(mint);
-    const curveAccount = await connection.getAccountInfo(bondingCurve);
-    if (!curveAccount || curveAccount.data.length < 81) return 0;
+    const mint = new PublicKey(tokenMintOrCurveAddress);
+    let curveAccount = await connection.getAccountInfo(deriveBondingCurve(mint));
+    if (!curveAccount) curveAccount = await connection.getAccountInfo(mint);
+    if (!curveAccount?.data) return 0;
     const data = curveAccount.data;
-    const sig = data.subarray(0, 8);
-    if (!sig.equals(PUMP_CURVE_DISCRIMINATOR)) return 0;
-    const creator = new PublicKey(data.subarray(49, 81));
-    const creatorVault = derivePumpCreatorVault(creator);
-    const vaultInfo = await connection.getAccountInfo(creatorVault);
-    if (!vaultInfo) return 0;
-    const rentExempt = await connection.getMinimumBalanceForRentExemption(0);
-    const lamports = Math.max(0, vaultInfo.lamports - rentExempt);
-    return lamports / LAMPORTS_PER_SOL;
+    if (!data.subarray(0, 8).equals(PUMP_CURVE_DISCRIMINATOR)) return 0;
+    return getCreatorVaultBalance(connection, data);
   } catch {
     return 0;
   }
+}
+
+function toNum(v: number | string | null | undefined): number {
+  if (v == null) return 0;
+  const n = typeof v === "string" ? parseFloat(v) : v;
+  return Number.isFinite(n) ? n : 0;
 }
 
 /** Sum GOLD token received by a wallet from parsed history (last N signatures). */
@@ -65,15 +74,15 @@ export async function getFeesConvertedToGold(devWalletAddress: string): Promise<
         });
         if (!tx?.meta?.postTokenBalances || !tx?.meta?.preTokenBalances) continue;
         const preByKey = new Map(
-          (tx.meta.preTokenBalances as { mint: string; owner: string; uiTokenAmount: { uiAmount: number } }[]).map((b) => [
+          (tx.meta.preTokenBalances as { mint: string; owner: string; uiTokenAmount?: { uiAmount?: number | string } }[]).map((b) => [
             `${b.mint}:${b.owner}`,
-            b.uiTokenAmount?.uiAmount ?? 0,
+            toNum(b.uiTokenAmount?.uiAmount),
           ])
         );
-        for (const post of tx.meta.postTokenBalances as { mint: string; owner: string; uiTokenAmount: { uiAmount: number } }[]) {
+        for (const post of tx.meta.postTokenBalances as { mint: string; owner: string; uiTokenAmount?: { uiAmount?: number | string } }[]) {
           if (post.mint !== goldMintStr || post.owner !== devWalletAddress) continue;
           const pre = preByKey.get(`${post.mint}:${post.owner}`) ?? 0;
-          const postVal = post.uiTokenAmount?.uiAmount ?? 0;
+          const postVal = toNum(post.uiTokenAmount?.uiAmount);
           const delta = postVal - pre;
           if (delta > 0) totalGold += delta;
         }

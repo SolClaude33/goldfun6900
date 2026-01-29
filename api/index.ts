@@ -60,7 +60,6 @@ async function getDistributionLogs(limit = 50): Promise<{ id: string; transactio
 const RPC = process.env.HELIUS_RPC_URL || process.env.SOLANA_RPC || "https://api.mainnet-beta.solana.com";
 const PUMP_PROGRAM_ID = new PublicKey("6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P");
 const GOLD_MINT = new PublicKey("GoLDppdjB1vDTPSGxyMJFqdnj134yH6Prg9eqsGDiw6A");
-const PUMP_CURVE_DISCRIMINATOR = Buffer.from([0x17, 0xb7, 0xf8, 0x37, 0x60, 0xd8, 0xac, 0x60]);
 
 function deriveBondingCurve(mint: PublicKey): PublicKey {
   const [pda] = PublicKey.findProgramAddressSync(
@@ -101,7 +100,9 @@ async function getPumpProtocolFees(tokenMintOrCurveAddress: string): Promise<num
     }
     if (!curveAccount?.data) return 0;
     const data = curveAccount.data;
-    if (!data.subarray(0, 8).equals(PUMP_CURVE_DISCRIMINATOR)) return 0;
+    // Standard Pump layout: 8 discriminator + 5×u64 + 1 bool + 32 creator = 81 bytes. Read creator at 49-81.
+    // Skip strict discriminator check so different Pump deployments still work.
+    if (data.length < 81) return 0;
     return getCreatorVaultBalance(connection, data);
   } catch {
     return 0;
@@ -179,6 +180,7 @@ function buildApp() {
 
   const STATS_CACHE_MS = 60_000;
   let statsCache: { data: Record<string, unknown>; at: number } | null = null;
+  let statsInFlight: Promise<Record<string, unknown>> | null = null;
 
   app.get("/api/public/stats", async (_req, res) => {
     try {
@@ -186,33 +188,43 @@ function buildApp() {
       if (statsCache && now - statsCache.at < STATS_CACHE_MS) {
         return res.json(statsCache.data);
       }
-      const tokenCa = getTokenCa();
-      const totalProtocolFees = tokenCa ? await getPumpProtocolFees(tokenCa) : 0;
-      const feesConvertedToGold = process.env.DEV_WALLET_ADDRESS
-        ? await getFeesConvertedToGold(process.env.DEV_WALLET_ADDRESS)
-        : 0;
-      const data = {
-        totalDistributions: 0,
-        totalGoldDistributed: feesConvertedToGold,
-        totalGoldMajorHolders: 0,
-        totalGoldMediumHolders: 0,
-        totalTokenBuyback: 0,
-        totalFeesClaimed: 0,
-        totalProtocolFees,
-        feesConvertedToGold,
-        totalBurned: 0,
-        goldMint: "GoLDppdjB1vDTPSGxyMJFqdnj134yH6Prg9eqsGDiw6A",
-        tokenMint: tokenCa,
-        lastDistribution: null,
-        minimumHolderPercentage: "0.5",
-        mediumHolderMinPercentage: "0.1",
-        majorHoldersPercentage: "70",
-        mediumHoldersPercentage: "20",
-        buybackPercentage: "20",
-        goldDistributionPercentage: "70",
-        burnPercentage: "30",
-      };
-      statsCache = { data, at: now };
+      // Single-flight: concurrent requests share one RPC run to avoid 429
+      if (!statsInFlight) {
+        statsInFlight = (async () => {
+          try {
+            const tokenCa = getTokenCa();
+            const totalProtocolFees = tokenCa ? await getPumpProtocolFees(tokenCa) : 0;
+            const feesConvertedToGold = process.env.DEV_WALLET_ADDRESS
+              ? await getFeesConvertedToGold(process.env.DEV_WALLET_ADDRESS)
+              : 0;
+            return {
+              totalDistributions: 0,
+              totalGoldDistributed: feesConvertedToGold,
+              totalGoldMajorHolders: 0,
+              totalGoldMediumHolders: 0,
+              totalTokenBuyback: 0,
+              totalFeesClaimed: 0,
+              totalProtocolFees,
+              feesConvertedToGold,
+              totalBurned: 0,
+              goldMint: "GoLDppdjB1vDTPSGxyMJFqdnj134yH6Prg9eqsGDiw6A",
+              tokenMint: tokenCa,
+              lastDistribution: null,
+              minimumHolderPercentage: "0.5",
+              mediumHolderMinPercentage: "0.1",
+              majorHoldersPercentage: "70",
+              mediumHoldersPercentage: "20",
+              buybackPercentage: "20",
+              goldDistributionPercentage: "70",
+              burnPercentage: "30",
+            };
+          } finally {
+            statsInFlight = null;
+          }
+        })();
+      }
+      const data = await statsInFlight;
+      statsCache = { data, at: Date.now() };
       res.json(data);
     } catch (err) {
       console.error("stats:", err);

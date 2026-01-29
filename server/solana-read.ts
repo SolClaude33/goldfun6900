@@ -25,8 +25,6 @@ function derivePumpCreatorVault(creator: PublicKey): PublicKey {
   return pda;
 }
 
-const PUMP_CURVE_DISCRIMINATOR = Buffer.from([0x17, 0xb7, 0xf8, 0x37, 0x60, 0xd8, 0xac, 0x60]);
-
 async function getCreatorVaultBalance(connection: Connection, curveAccountData: Buffer): Promise<number> {
   if (curveAccountData.length < 81) return 0;
   const creator = new PublicKey(curveAccountData.subarray(49, 81));
@@ -46,7 +44,8 @@ export async function getPumpProtocolFees(tokenMintOrCurveAddress: string): Prom
     if (!curveAccount) curveAccount = await connection.getAccountInfo(mint);
     if (!curveAccount?.data) return 0;
     const data = curveAccount.data;
-    if (!data.subarray(0, 8).equals(PUMP_CURVE_DISCRIMINATOR)) return 0;
+    // Standard Pump layout: creator at bytes 49-81. Skip strict discriminator so different deployments work.
+    if (data.length < 81) return 0;
     return getCreatorVaultBalance(connection, data);
   } catch {
     return 0;

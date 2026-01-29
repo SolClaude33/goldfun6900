@@ -59,15 +59,19 @@ function toNum(v: number | string | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Sum GOLD token received by a wallet from parsed history (last N signatures). */
+const MAX_SIGNATURES = 80;
+const MAX_PARSED_TXS = 20;
+
+/** Sum GOLD token received by a wallet from parsed history (limited to avoid RPC 429/timeout). */
 export async function getFeesConvertedToGold(devWalletAddress: string): Promise<number> {
   try {
     const connection = new Connection(RPC, "confirmed");
     const wallet = new PublicKey(devWalletAddress);
     const goldMintStr = GOLD_MINT.toBase58();
-    const sigs = await connection.getSignaturesForAddress(wallet, { limit: 500 });
+    const sigs = await connection.getSignaturesForAddress(wallet, { limit: MAX_SIGNATURES });
     let totalGold = 0;
-    for (const { signature } of sigs) {
+    const toParse = sigs.slice(0, MAX_PARSED_TXS);
+    for (const { signature } of toParse) {
       try {
         const tx = await connection.getParsedTransaction(signature, {
           maxSupportedTransactionVersion: 0,

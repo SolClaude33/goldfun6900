@@ -114,14 +114,19 @@ function toNum(v: number | string | null | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Max RPC calls: 1 (signatures) + MAX_PARSED_TXS (parsed tx). Keep low to avoid 429/timeout. */
+const MAX_SIGNATURES = 80;
+const MAX_PARSED_TXS = 20;
+
 async function getFeesConvertedToGold(devWalletAddress: string): Promise<number> {
   try {
     const connection = new Connection(RPC, "confirmed");
     const wallet = new PublicKey(devWalletAddress);
     const goldMintStr = GOLD_MINT.toBase58();
-    const sigs = await connection.getSignaturesForAddress(wallet, { limit: 500 });
+    const sigs = await connection.getSignaturesForAddress(wallet, { limit: MAX_SIGNATURES });
     let totalGold = 0;
-    for (const { signature } of sigs) {
+    const toParse = sigs.slice(0, MAX_PARSED_TXS);
+    for (const { signature } of toParse) {
       try {
         const tx = await connection.getParsedTransaction(signature, { maxSupportedTransactionVersion: 0 });
         if (!tx?.meta?.postTokenBalances || !tx?.meta?.preTokenBalances) continue;
@@ -172,14 +177,21 @@ function buildApp() {
     }
   });
 
+  const STATS_CACHE_MS = 60_000;
+  let statsCache: { data: Record<string, unknown>; at: number } | null = null;
+
   app.get("/api/public/stats", async (_req, res) => {
     try {
+      const now = Date.now();
+      if (statsCache && now - statsCache.at < STATS_CACHE_MS) {
+        return res.json(statsCache.data);
+      }
       const tokenCa = getTokenCa();
       const totalProtocolFees = tokenCa ? await getPumpProtocolFees(tokenCa) : 0;
       const feesConvertedToGold = process.env.DEV_WALLET_ADDRESS
         ? await getFeesConvertedToGold(process.env.DEV_WALLET_ADDRESS)
         : 0;
-      res.json({
+      const data = {
         totalDistributions: 0,
         totalGoldDistributed: feesConvertedToGold,
         totalGoldMajorHolders: 0,
@@ -199,7 +211,9 @@ function buildApp() {
         buybackPercentage: "20",
         goldDistributionPercentage: "70",
         burnPercentage: "30",
-      });
+      };
+      statsCache = { data, at: now };
+      res.json(data);
     } catch (err) {
       console.error("stats:", err);
       res.status(500).json({ error: "Failed to fetch stats" });

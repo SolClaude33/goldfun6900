@@ -10,7 +10,6 @@ GoldFunX6900 is a Solana token launching on Pumpfun with automatic fee distribut
 ## Current State
 - Landing page with hero section and "CA: SOON" placeholder
 - LiveDashboard component displaying real distribution data (stats + transaction logs)
-- Admin panel at /admin (password-protected via session-based tokens)
 - Database configured for tracking distributions and holder snapshots
 - Full Solana integration with PumpSwap fee claiming, Jupiter swaps, and SPL distributions
 
@@ -30,9 +29,8 @@ GoldFunX6900 is a Solana token launching on Pumpfun with automatic fee distribut
 ### Key Files
 - `client/src/components/Hero.tsx` - Landing page hero section
 - `client/src/components/LiveDashboard.tsx` - Real-time distribution stats and logs
-- `client/src/pages/Admin.tsx` - Admin control panel
-- `server/routes.ts` - API routes (admin and public endpoints)
-- `server/solana.ts` - Full Solana blockchain service
+- `server/routes.ts` - API routes (public only)
+- `server/solana-read.ts` - Read-only Solana (protocol fees, fees→gold)
 - `server/storage.ts` - Database operations
 - `shared/schema.ts` - Database schema
 
@@ -62,11 +60,10 @@ GoldFunX6900 is a Solana token launching on Pumpfun with automatic fee distribut
 
 ## Configuration
 
-### Required Secrets (for full functionality)
-1. `ADMIN_PASSWORD` - Admin panel access password (already set)
-2. `CREATOR_WALLET_PRIVATE_KEY` - Solana wallet private key (base58 encoded)
-3. `TOKEN_CONTRACT_ADDRESS` - Token mint address (set when launched on Pumpfun)
-4. `HELIUS_RPC_URL` - Helius RPC endpoint for reliable Solana access (already set)
+### Required / recommended env
+1. `CA` - Token contract (Pump.fun). For Hero and Total Protocol Fees.
+2. `DEV_WALLET_ADDRESS` - Wallet for "Fees converted to Gold" (optional).
+3. `HELIUS_RPC_URL` or `SOLANA_RPC` - RPC for dashboard stats (recommended in production).
 
 ### Distribution Parameters (Tiered System)
 - **70%** of fees → Buy $GOLD → Distribute to major holders (≥0.5% supply)
@@ -95,7 +92,6 @@ GoldFunX6900 is a Solana token launching on Pumpfun with automatic fee distribut
 - **Dual-swap strategy**: Buyback tries Pump.fun bonding curve first, falls back to Jupiter for AMM-migrated tokens
 - **Added getBondingCurveState()**: Fetches virtual/real reserves for price calculation
 - **Token 2022 Program support**: Full support for Token 2022 program used by new Pump.fun tokens
-- **Added test endpoints**: `/api/admin/test/buyback`, `/api/admin/test/sell`, `/api/admin/test/token-balance` for manual testing
 - **Buyback limitation**: Requires either active bonding curve OR Jupiter AMM liquidity
 - **FIXED: Pump.fun Fee Claiming** - Corrected PDA derivation to use seeds ["creator-vault", creator] with the Pump.fun bonding curve program (6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P)
 - **Added dual-program support**: System first tries Pump.fun bonding curve, then falls back to PumpSwap AMM

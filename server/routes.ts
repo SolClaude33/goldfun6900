@@ -1,133 +1,13 @@
-import type { Express, Request, Response, NextFunction } from "express";
+import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import crypto from "crypto";
 import { getPumpProtocolFees, getFeesConvertedToGold } from "./solana-read";
 import { getDistributionLogs } from "./firebase";
-
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD;
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString("hex");
-const activeSessions = new Map<string, { createdAt: number }>();
-const SESSION_DURATION = 24 * 60 * 60 * 1000;
-
-function generateSessionToken(): string {
-  return crypto.randomBytes(32).toString("hex");
-}
-
-function cleanExpiredSessions() {
-  const now = Date.now();
-  Array.from(activeSessions.entries()).forEach(([token, session]) => {
-    if (now - session.createdAt > SESSION_DURATION) {
-      activeSessions.delete(token);
-    }
-  });
-}
-
-function adminAuth(req: Request, res: Response, next: NextFunction) {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "Unauthorized" });
-  }
-  
-  const token = authHeader.split(" ")[1];
-  const session = activeSessions.get(token);
-  
-  if (!session) {
-    return res.status(401).json({ error: "Invalid or expired session" });
-  }
-  
-  if (Date.now() - session.createdAt > SESSION_DURATION) {
-    activeSessions.delete(token);
-    return res.status(401).json({ error: "Session expired" });
-  }
-  
-  next();
-}
 
 export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
-  
-  setInterval(cleanExpiredSessions, 60 * 60 * 1000);
-
-  app.post("/api/admin/login", async (req, res) => {
-    const { password } = req.body;
-    
-    if (!ADMIN_PASSWORD) {
-      return res.status(500).json({ error: "Admin password not configured" });
-    }
-    
-    if (password === ADMIN_PASSWORD) {
-      const sessionToken = generateSessionToken();
-      activeSessions.set(sessionToken, { createdAt: Date.now() });
-      res.json({ success: true, token: sessionToken });
-    } else {
-      res.status(401).json({ error: "Invalid password" });
-    }
-  });
-  
-  app.post("/api/admin/logout", adminAuth, async (req, res) => {
-    const authHeader = req.headers.authorization;
-    if (authHeader) {
-      const token = authHeader.split(" ")[1];
-      activeSessions.delete(token);
-    }
-    res.json({ success: true });
-  });
-
-  app.get("/api/admin/config", adminAuth, async (req, res) => {
-    try {
-      let config = await storage.getProtocolConfig();
-      if (!config) {
-        config = await storage.updateProtocolConfig({
-          goldMint: "GoLDppdjB1vDTPSGxyMJFqdnj134yH6Prg9eqsGDiw6A",
-          minimumHolderPercentage: "0.5",
-          majorHoldersPercentage: "70",
-          mediumHoldersPercentage: "20",
-          buybackPercentage: "10",
-        });
-      }
-      res.json(config);
-    } catch (error) {
-      console.error("Error fetching config:", error);
-      res.status(500).json({ error: "Failed to fetch config" });
-    }
-  });
-
-  app.patch("/api/admin/config", adminAuth, async (req, res) => {
-    try {
-      const config = await storage.updateProtocolConfig(req.body);
-      res.json(config);
-    } catch (error) {
-      console.error("Error updating config:", error);
-      res.status(500).json({ error: "Failed to update config" });
-    }
-  });
-
-  app.get("/api/admin/distributions", adminAuth, async (req, res) => {
-    try {
-      const distributions = await storage.getDistributions();
-      res.json(distributions);
-    } catch (error) {
-      console.error("Error fetching distributions:", error);
-      res.status(500).json({ error: "Failed to fetch distributions" });
-    }
-  });
-
-  app.get("/api/admin/distributions/:id", adminAuth, async (req, res) => {
-    try {
-      const distribution = await storage.getDistribution(req.params.id);
-      if (!distribution) {
-        return res.status(404).json({ error: "Distribution not found" });
-      }
-      const snapshots = await storage.getHolderSnapshots(req.params.id);
-      res.json({ distribution, snapshots });
-    } catch (error) {
-      console.error("Error fetching distribution:", error);
-      res.status(500).json({ error: "Failed to fetch distribution" });
-    }
-  });
 
   app.get("/api/public/config", (_req, res) => {
     res.json({ ca: process.env.CA || null });

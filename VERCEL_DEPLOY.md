@@ -45,7 +45,7 @@ In the Vercel project: **Settings → Domains** → add your domain.
 
 ## Notes
 
-- The API runs as a **serverless function** (see `api/index.ts` and `vercel.json`). The handler is **self-contained** in `api/` (`api/index.ts` + `api/lib/`); it does not import from `server/`, so Vercel can resolve all modules.
+- The API runs as a **serverless function** (see `api/index.ts` and `vercel.json`). The handler is a **single file** (`api/index.ts`) with no local imports, so Vercel does not need to resolve `api/lib/` or `server/`.
 - Local dev: `npm run dev` (Express + Vite on port 5000).
 - See `ENV.md` for all environment variables.
 - If you see **401** on `/favicon.png` or other static files, check **Vercel → Settings → Deployment Protection** (e.g. password protection can return 401).
